@@ -1,0 +1,553 @@
+﻿diff --git a/packages/llm/llm-pi-ai/src/adapter.ts b/packages/llm/llm-pi-ai/src/adapter.ts
+index f06b27a..7753541 100644
+--- a/packages/llm/llm-pi-ai/src/adapter.ts
++++ b/packages/llm/llm-pi-ai/src/adapter.ts
+@@ -59,6 +59,7 @@ import type { AttachmentStore } from '@deepseek-ai/dsh-attachment'
+ import { idleWatchdog, timeoutOf } from '@deepseek-ai/dsh-timeout'
+ import type { ResolvedPiAiProviderProfile } from './config.ts'
+ import { toPiContext } from './context.ts'
++import { collectRequestMedia, streamMediaRequest } from './media.ts'
+ import { toStreamChunks } from './stream.ts'
+ 
+ /** One resolution's frozen view: the profiles and the collection built from them. */
+@@ -268,13 +269,18 @@ export class PiAiAdapter extends LlmAdapter {
+   override listModels(provider: string): Promise<readonly LlmModelInfo[]> {
+     return Promise.resolve().then(() => {
+       const snapshot = this.current()
+-      this.profileOf(snapshot, provider)
+-      return snapshot.models.getModels(provider).map(model => ({
+-        provider,
+-        id: model.id,
+-        name: model.name,
+-        inputModalities: [...model.input],
+-      }))
++      const profile = this.profileOf(snapshot, provider)
++      return snapshot.models.getModels(provider).map((model): LlmModelInfo => {
++        const modalities = profile.declaredModalities.get(model.id) ?? model.input
++        return {
++          provider,
++          id: model.id,
++          name: model.name,
++          ...modalities === undefined
++            ? {}
++            : { inputModalities: [...modalities] as NonNullable<LlmModelInfo['inputModalities']> },
++        }
++      })
+     })
+   }
+ 
+@@ -296,11 +302,14 @@ export class PiAiAdapter extends LlmAdapter {
+     // Only a cap the deployment configured is a request default; the
+     // catalog's `maxTokens` sizes the model and stops there.
+     const configuredMaxTokens = profile.configuredMaxTokens.get(model)
++    const modalities = profile.declaredModalities.get(model) ?? resolvedModel.input
+     return {
+       provider,
+       id: model,
+       name: resolvedModel.name,
+-      inputModalities: [...resolvedModel.input],
++      ...modalities === undefined
++        ? {}
++        : { inputModalities: [...modalities] as NonNullable<LlmResolvedModelInfo['inputModalities']> },
+       context: { contextWindow: resolvedModel.contextWindow },
+       ...configuredMaxTokens === undefined ? {} : { defaultMaxTokens: configuredMaxTokens },
+       ...reasoningInfo(resolvedModel, defaultLevel),
+@@ -351,6 +360,34 @@ export class PiAiAdapter extends LlmAdapter {
+       if (containsImage && !model.input.includes('image')) {
+         throw new LlmError(`pi-ai model "${model.id}" does not support image input`, 'UNSUPPORTED_CONTENT')
+       }
++      // Video/audio exceed pi-ai's wire vocabulary; the adapter serves them
++      // itself over the route's OpenAI-compatible endpoint. The declared
++      // modality list is the gate: undeclared media are refused here, before
++      // bytes are read, rather than dropped silently into a text-only request.
++      const declared = profile.declaredModalities.get(options.model) ?? model.input
++      const requestedMedia = collectRequestMedia(options.messages)
++      if (requestedMedia.length > 0) {
++        const attachments = this.config.resolveAttachments?.()
++        if (attachments === undefined) {
++          throw new LlmError('pi-ai media input requires the durable attachment service', 'UNSUPPORTED_CONTENT')
++        }
++        for (const kind of new Set(requestedMedia.map(occurrence => occurrence.kind))) {
++          if (!(declared as readonly string[]).includes(kind)) {
++            throw new LlmError(`pi-ai model "${model.id}" does not support ${kind} input`, 'UNSUPPORTED_CONTENT')
++          }
++        }
++        yield* streamMediaRequest({
++          profile,
++          model,
++          options,
++          media: requestedMedia,
++          attachments,
++          reasoning,
++          apiKey,
++          watchdog,
++        })
++        return
++      }
+       const attachments = containsImage ? this.config.resolveAttachments?.() : undefined
+       if (containsImage && attachments === undefined) {
+         throw new LlmError('pi-ai image input requires the durable attachment service', 'UNSUPPORTED_CONTENT')
+diff --git a/packages/llm/llm-pi-ai/src/catalog.ts b/packages/llm/llm-pi-ai/src/catalog.ts
+index 1e9b126..6680a75 100644
+--- a/packages/llm/llm-pi-ai/src/catalog.ts
++++ b/packages/llm/llm-pi-ai/src/catalog.ts
+@@ -39,6 +39,16 @@ const NO_COST: ModelCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+ /** One request modality a pi-ai model may accept. */
+ export type PiAiModality = Model<Api>['input'][number]
+ 
++/**
++ * One request modality a profile may declare, wider than {@link PiAiModality}:
++ * pi-ai's wire vocabulary stops at text and image, but the adapter serves
++ * video and audio itself — declared modalities gate the direct OpenAI-compatible
++ * media path, which pi-ai never sees. Declaring one is the same endpoint claim
++ * an image declaration is: nothing interrogates the gateway, so a model
++ * claiming video its endpoint refuses fails mid-turn at the provider instead.
++ */
++export type PiAiDeclaredModality = PiAiModality | 'video' | 'audio'
++
+ /**
+  * Every pi-ai request modality. The `Record` key type is a drift gate: a pi-ai
+  * upgrade that adds or removes a modality fails compilation here naming the
+@@ -52,6 +62,15 @@ const MODALITY_GATE: Record<PiAiModality, true> = {
+ /** Every request modality a profile may declare. */
+ export const MODALITIES = Object.keys(MODALITY_GATE) as readonly PiAiModality[]
+ 
++/** Every modality a profile may declare on a model or route default. */
++export const DECLARED_MODALITIES: readonly PiAiDeclaredModality[] = [...MODALITIES, 'video', 'audio']
++
++/** pi-ai's wire modalities present in one declared list, in declared order. */
++export function piAiInputOf(declared: readonly PiAiDeclaredModality[]): Model<Api>['input'] {
++  const wire = declared.filter((modality): modality is PiAiModality => (MODALITIES as readonly string[]).includes(modality))
++  return wire.length > 0 ? [...wire] : ['text']
++}
++
+ /**
+  * One entry's modality list, or `undefined` when it states no answer. Absent
+  * and empty mean the same thing — `[]` describes a model that accepts nothing
+@@ -61,7 +80,7 @@ export const MODALITIES = Object.keys(MODALITY_GATE) as readonly PiAiModality[]
+  * @param configured - the list a `models` or `modelOverrides` entry supplied.
+  * @returns the declared modalities, or `undefined` to ask the next level.
+  */
+-function declaredInput(configured: readonly PiAiModality[] | undefined): Model<Api>['input'] | undefined {
++function declaredInput(configured: readonly PiAiDeclaredModality[] | undefined): readonly PiAiDeclaredModality[] | undefined {
+   return configured === undefined || configured.length === 0 ? undefined : [...configured]
+ }
+ 
+@@ -554,9 +573,11 @@ export interface PiAiModelProfile {
+    * what the catalog records. This is a claim about the endpoint, not a check
+    * of it: nothing interrogates a gateway for what it accepts, so a model
+    * claiming images its endpoint refuses is refused by the provider instead,
+-   * mid-turn.
++   * mid-turn. Modalities pi-ai cannot carry (`video`, `audio`) stay declared
++   * metadata: they gate the adapter's own direct media path, which is the only
++   * consumer that can honor them.
+    */
+-  input?: PiAiModality[]
++  input?: PiAiDeclaredModality[]
+   /**
+    * Selectable reasoning efforts. Absent inherits the installed catalog
+    * entry's capability (a hand-declared model has none and does not reason);
+@@ -582,6 +603,18 @@ export type PiAiModelOverride = Omit<PiAiModelProfile, 'id'>
+ export interface RouteCatalogRequest {
+   /** Provider route key, stamped onto every materialized model. */
+   provider: string
++  /**
++   * Installed catalog route whose model catalog this route inherits instead of
++   * its own key's. A deployment needs a second configuration of one provider —
++   * a second endpoint, a second credential — and the providers dict is keyed
++   * by route, so the second configuration must live under a new route key;
++   * without this field that route would have to restate the whole catalog by
++   * hand. Inheriting keeps the installed entries (including reasoning and
++   * compat metadata) serving, while `models` still replaces the inherited
++   * catalog and `modelOverrides` still customizes it entry by entry — the
++   * inherited catalog stands exactly where the route's own would.
++   */
++  catalog?: string
+   /** Wire protocol override; absent defers to each catalog model's own API. */
+   api?: string
+   /** Endpoint override; absent defers to the catalog model, then the catalog provider. */
+@@ -597,7 +630,7 @@ export interface RouteCatalogRequest {
+   /** Output capability for a model neither the entry nor the catalog sizes. */
+   defaultMaxTokens: number
+   /** Modalities for a model neither the entry nor the catalog declares. */
+-  defaultInput: Model<Api>['input']
++  defaultInput: readonly PiAiDeclaredModality[]
+ }
+ 
+ /** Report a route the deployment cannot serve, naming the settings key at fault. */
+@@ -769,6 +802,13 @@ export interface RouteCatalog {
+    * picked, so only an explicit configuration lands here.
+    */
+   configuredMaxTokens: ReadonlyMap<string, number>
++  /**
++   * Each model's full declared modality list, by model id — including the
++   * `video`/`audio` declarations pi-ai's `Model.input` cannot carry. The
++   * adapter reports and gates on this list; pi-ai ever sees only its own wire
++   * modalities.
++   */
++  declaredModalities: ReadonlyMap<string, readonly PiAiDeclaredModality[]>
+ }
+ 
+ /**
+@@ -781,8 +821,10 @@ export interface RouteCatalog {
+  */
+ export function resolveRouteModels(request: RouteCatalogRequest): RouteCatalog {
+   const { provider } = request
+-  const defaults = catalogModels(provider)
+-  const providerBaseUrl = catalogProvider(provider)?.baseUrl
++  // The inherited catalog stands in for the route's own everywhere: models,
++  // provider-level endpoint, and the shared protocol answer below.
++  const defaults = catalogModels(request.catalog ?? provider)
++  const providerBaseUrl = catalogProvider(request.catalog ?? provider)?.baseUrl
+   // An absent `models` key and an empty one are the same request: the config
+   // schema materializes `[]` for the absent case, and an empty catalog could
+   // serve no request anyway, so both mean "serve the installed catalog".
+@@ -830,6 +872,7 @@ export function resolveRouteModels(request: RouteCatalogRequest): RouteCatalog {
+   }
+   const seen = new Set<string>()
+   const configuredMaxTokens = new Map<string, number>()
++  const declaredModalities = new Map<string, readonly PiAiDeclaredModality[]>()
+   const models = entries.map((entry) => {
+     if (entry.id.length === 0) invalid(provider, 'has a model with an empty id')
+     if (seen.has(entry.id)) invalid(provider, `lists model "${entry.id}" more than once`)
+@@ -859,6 +902,13 @@ export function resolveRouteModels(request: RouteCatalogRequest): RouteCatalog {
+     // Only a value the profile named is a deployment choice; the catalog's is
+     // the model's capability and stays out of request defaults.
+     if (entry.maxTokens !== undefined) configuredMaxTokens.set(entry.id, entry.maxTokens)
++    // The declared list is the full capability claim, including modalities
++    // pi-ai cannot carry; the materialized `input` keeps only pi-ai's wire
++    // vocabulary so the catalog object stays honestly typed.
++    const declared: readonly PiAiDeclaredModality[] = declaredInput(entry.input)
++      ?? base?.input
++      ?? request.defaultInput
++    declaredModalities.set(entry.id, [...declared])
+     return {
+       // The installed entry lays the floor, and the fields below override it.
+       // Enumerating instead would silently drop every `Model` field this
+@@ -871,7 +921,7 @@ export function resolveRouteModels(request: RouteCatalogRequest): RouteCatalog {
+       api,
+       provider,
+       baseUrl,
+-      input: declaredInput(entry.input) ?? base?.input ?? [...request.defaultInput],
++      input: piAiInputOf(declared),
+       cost: base?.cost ?? NO_COST,
+       contextWindow,
+       maxTokens,
+@@ -889,5 +939,5 @@ export function resolveRouteModels(request: RouteCatalogRequest): RouteCatalog {
+     invalid(provider, `sets compat "${field}", but no model on the route speaks a protocol that takes it;`
+       + ` it exists on ${takers.join(', ')}`)
+   }
+-  return { models, configuredMaxTokens }
++  return { models, configuredMaxTokens, declaredModalities }
+ }
+diff --git a/packages/llm/llm-pi-ai/src/config.ts b/packages/llm/llm-pi-ai/src/config.ts
+index 5fdcc2c..389bd52 100644
+--- a/packages/llm/llm-pi-ai/src/config.ts
++++ b/packages/llm/llm-pi-ai/src/config.ts
+@@ -23,16 +23,17 @@ import { resolveRetryPolicy, RetryPolicySchema } from '@deepseek-ai/dsh-llm'
+ import type { ResolvedRetryPolicy, RetryPolicyConfig } from '@deepseek-ai/dsh-llm'
+ import {
+   CACHE_CONTROL_FORMATS,
++  catalogProvider,
+   CHAT_TEMPLATE_VARS,
++  DECLARED_MODALITIES,
+   MAX_TOKENS_FIELDS,
+-  MODALITIES,
+   resolveRouteModels,
+   SUPPORTED_THINKING_FORMATS,
+   THINKING_LEVELS,
+ } from './catalog.ts'
+ import type {
+   PiAiCompatProfile,
+-  PiAiModality,
++  PiAiDeclaredModality,
+   PiAiModelOverride,
+   PiAiModelProfile,
+   PiAiReasoningEfforts,
+@@ -73,7 +74,7 @@ export const DEFAULT_MAX_TOKENS = 32_768
+  * rejects mid-turn, after the message is durable, leaving the session
+  * repeating a request that cannot succeed.
+  */
+-export const DEFAULT_INPUT: readonly PiAiModality[] = ['text']
++export const DEFAULT_INPUT: readonly PiAiDeclaredModality[] = ['text']
+ 
+ export type {
+   PiAiCompatProfile,
+@@ -88,6 +89,16 @@ export type {
+ export interface PiAiProviderProfile {
+   /** Credential reference (environment-variable name) resolved per request through `ctx.credentials`. */
+   apiKeyEnv?: string
++  /**
++   * Installed-catalog route whose model catalog this route inherits. The
++   * providers dict is keyed by route, so a second configuration of one
++   * provider — a second endpoint, a second credential — lives under a new
++   * route key and names the installed provider here to keep its catalog
++   * (protocols, reasoning, capacities) serving. Absent inherits from the
++   * route's own key, which is the normal case; on a route the catalog does
++   * not describe, absent means the profile is the whole declaration.
++   */
++  catalog?: string
+   /** Name shown by configuration surfaces; defaults to the route key. */
+   displayName?: string
+   /**
+@@ -141,9 +152,10 @@ export interface PiAiProviderProfile {
+    * value never narrows one. A gateway serving vision models the catalog does
+    * not describe declares `[text, image]` once here instead of on every entry.
+    * Unlike an entry's list, this one may not be empty — nothing sits below it
+-   * to answer instead.
++   * to answer instead. `video`/`audio` are declaration-only: they gate the
++   * adapter's own direct media path and never reach pi-ai.
+    */
+-  defaultInput?: PiAiModality[]
++  defaultInput?: PiAiDeclaredModality[]
+   /** Provider request headers; Harness attribution wins reserved names. */
+   headers?: Record<string, string>
+   /** Provider-neutral pi-ai reasoning level. */
+@@ -207,6 +219,13 @@ export interface ResolvedPiAiProviderProfile
+    * own, so a catalog capability must not appear here.
+    */
+   configuredMaxTokens: ReadonlyMap<string, number>
++  /**
++   * Each model's full declared modality list, by model id — including the
++   * `video`/`audio` declarations pi-ai's `Model.input` cannot carry. Reported
++   * as the model's `inputModalities` and used to gate the adapter's own
++   * direct OpenAI-compatible media path.
++   */
++  declaredModalities: ReadonlyMap<string, readonly PiAiDeclaredModality[]>
+ }
+ 
+ /** Plugin configuration: the provider routes this instance owns. */
+@@ -288,7 +307,7 @@ const modelFields = {
+   // No explicit default, unlike the route's `defaultInput`: schemastery
+   // materializes `[]` for an absent array, and resolution reads that as "no
+   // answer here" so the catalog entry below still applies.
+-  input: z.array(z.union(MODALITIES)),
++  input: z.array(z.union(DECLARED_MODALITIES)),
+   // The union, not a bare dict: schemastery materializes an absent dict as
+   // `{}`, and absent must stay distinguishable — it means "inherit the
+   // installed catalog's capability", while `false` disables reasoning.
+@@ -306,6 +325,7 @@ const modelOverride: z<PiAiModelOverride> = z.object(modelFields)
+ 
+ const profile = z.object({
+   apiKeyEnv: z.string().role('credential-ref'),
++  catalog: z.string(),
+   displayName: z.string(),
+   api: z.union(supportedProtocols()),
+   baseURL: z.string(),
+@@ -314,7 +334,7 @@ const profile = z.object({
+   compat: compatProfile,
+   defaultContextWindow: z.number().step(1).min(1).default(DEFAULT_CONTEXT_WINDOW),
+   defaultMaxTokens: z.number().step(1).min(1).default(DEFAULT_MAX_TOKENS),
+-  defaultInput: z.array(z.union(MODALITIES)).default([...DEFAULT_INPUT]),
++  defaultInput: z.array(z.union(DECLARED_MODALITIES)).default([...DEFAULT_INPUT]),
+   headers: z.dict(z.string()),
+   reasoning: z.union(THINKING_LEVELS),
+   thinkingBudgets,
+@@ -393,6 +413,17 @@ export function resolveProfiles(
+     if (source.displayName !== undefined && source.displayName.length === 0) {
+       throw new Error(`llm-pi-ai: provider "${provider}" has an empty displayName`)
+     }
++    if (source.catalog !== undefined) {
++      if (source.catalog.length === 0) {
++        throw new Error(`llm-pi-ai: provider "${provider}" has an empty catalog`)
++      }
++      if (catalogProvider(source.catalog) === undefined) {
++        throw new Error(
++          `llm-pi-ai: provider "${provider}" inherits catalog "${source.catalog}", which the installed`
++          + ' catalog does not ship',
++        )
++      }
++    }
+     const streamIdleTimeoutMs = source.streamIdleTimeoutMs ?? DEFAULT_STREAM_IDLE_TIMEOUT_MS
+     if (!Number.isFinite(streamIdleTimeoutMs)
+       || streamIdleTimeoutMs <= 0
+@@ -428,6 +459,7 @@ export function resolveProfiles(
+     const displayName = source.displayName ?? provider
+     const catalog = resolveRouteModels({
+       provider,
++      ...source.catalog === undefined ? {} : { catalog: source.catalog },
+       ...source.api === undefined ? {} : { api: source.api },
+       ...source.baseURL === undefined ? {} : { baseURL: source.baseURL },
+       ...source.models === undefined ? {} : { models: source.models },
+@@ -451,9 +483,11 @@ export function resolveProfiles(
+       ...rest.headers === undefined ? {} : { headers: { ...rest.headers } },
+       ...rest.thinkingBudgets === undefined ? {} : { thinkingBudgets: { ...rest.thinkingBudgets } },
+       configuredMaxTokens: catalog.configuredMaxTokens,
++      declaredModalities: catalog.declaredModalities,
+       piProvider: buildProvider({
+         provider,
+         displayName,
++        ...source.catalog === undefined ? {} : { catalog: source.catalog },
+         ...source.api === undefined ? {} : { api: source.api },
+         ...source.baseURL === undefined ? {} : { baseURL: source.baseURL },
+         models: catalog.models,
+diff --git a/packages/llm/llm-pi-ai/src/provider.ts b/packages/llm/llm-pi-ai/src/provider.ts
+index b4331b2..716a450 100644
+--- a/packages/llm/llm-pi-ai/src/provider.ts
++++ b/packages/llm/llm-pi-ai/src/provider.ts
+@@ -90,6 +90,13 @@ export interface ProviderSpec {
+   provider: string
+   /** Display name for selectors and status labels. */
+   displayName: string
++  /**
++   * Installed-catalog route this route inherits its catalog from (see
++   * `PiAiProviderProfile.catalog`). The catalog provider reused below is the
++   * inherited one, so a second configuration of one provider keeps its
++   * protocol implementations and ambient discovery exactly.
++   */
++  catalog?: string
+   /** Wire protocol override; absent means each model keeps its catalog protocol. */
+   api?: string
+   /** Endpoint override already applied to {@link models}; kept for provider-level display. */
+@@ -165,7 +172,7 @@ function reuseCatalogProvider(base: Provider, spec: ProviderSpec): Provider {
+  * @throws Error when the route names a wire protocol this build cannot serve.
+  */
+ export function buildProvider(spec: ProviderSpec): Provider {
+-  const catalog = catalogProvider(spec.provider)
++  const catalog = catalogProvider(spec.catalog ?? spec.provider)
+   // A catalog route keeping its catalog protocol reuses the catalog provider;
+   // an explicit protocol means the deployment is repointing the route at a
+   // different wire format, which only the protocol table can serve.
+diff --git a/packages/llm/llm-pi-ai/tests/config.spec.ts b/packages/llm/llm-pi-ai/tests/config.spec.ts
+index 61a2535..0da779a 100644
+--- a/packages/llm/llm-pi-ai/tests/config.spec.ts
++++ b/packages/llm/llm-pi-ai/tests/config.spec.ts
+@@ -1,5 +1,5 @@
+ import { describe, expect, it } from 'vitest'
+-import { assertServiceable, Config } from '../src/config.ts'
++import { assertServiceable, Config, resolveProfiles } from '../src/config.ts'
+ 
+ /** Validate one hand-declared route, with the caller's fields layered onto it. */
+ const routeWith = (profile: Record<string, unknown>): (() => unknown) =>
+@@ -38,9 +38,14 @@ describe('reasoning schema boundary', () => {
+ })
+ 
+ describe('modality schema boundary', () => {
+-  it('rejects a modality pi-ai does not know, at either level', () => {
+-    expect(configWith({ input: ['audio'] })).toThrow(/expected/)
+-    expect(routeWith({ defaultInput: ['text', 'audio'] })).toThrow(/expected/)
++  it('rejects a modality the vocabulary does not know, at either level', () => {
++    expect(configWith({ input: ['file'] })).toThrow(/expected/)
++    expect(routeWith({ defaultInput: ['text', 'file'] })).toThrow(/expected/)
++  })
++
++  it('accepts the adapter-owned video and audio declarations pi-ai cannot carry', () => {
++    expect(configWith({ input: ['text', 'image', 'video'] })).not.toThrow()
++    expect(routeWith({ defaultInput: ['text', 'audio'] })).not.toThrow()
+   })
+ 
+   it('refuses a route whose models could accept nothing', () => {
+@@ -65,6 +70,44 @@ describe('modality schema boundary', () => {
+   })
+ })
+ 
++describe('catalog inheritance', () => {
++  /** A second configuration of the built-in DeepSeek route, as the clone card writes it. */
++  const replica = (profile: Record<string, unknown>): Config => ({
++    providers: {
++      'deepseek-2': {
++        displayName: 'DeepSeek 2',
++        apiKeyEnv: 'DEEPSEEK_2_API_KEY',
++        ...profile,
++      },
++    },
++  })
++
++  it('serves a second configuration from the inherited built-in catalog', () => {
++    expect(() => { assertServiceable(replica({ catalog: 'deepseek' })) }).not.toThrow()
++    const resolved = resolveProfiles(replica({ catalog: 'deepseek' }).providers).get('deepseek-2')
++    expect(resolved).toBeDefined()
++    // The inherited catalog answers models and endpoint; the schema keeps the
++    // catalog name as a plain known field.
++    const models = resolved?.piProvider.getModels() ?? []
++    expect(models.some(model => model.id === 'deepseek-v4-flash')).toBe(true)
++    expect(models.every(model => model.provider === 'deepseek-2')).toBe(true)
++    expect(resolved?.piProvider.baseUrl).toBe('https://api.deepseek.com')
++  })
++
++  it('refuses an empty or unknown catalog name', () => {
++    expect(() => { assertServiceable(replica({ catalog: '' })) })
++      .toThrow(/empty catalog/)
++    expect(() => { assertServiceable(replica({ catalog: 'no-such-vendor' })) })
++      .toThrow(/inherits catalog "no-such-vendor".*does not ship/)
++  })
++
++  it('keeps the catalog name schema-known', () => {
++    type Materialized = { providers: Record<string, { catalog?: unknown }> }
++    const parsed = Config(replica({ catalog: 'deepseek' })) as unknown as Materialized
++    expect(parsed.providers['deepseek-2']?.catalog).toBe('deepseek')
++  })
++})
++
+ describe('request image policy bounds', () => {
+   it.each([
+     ['requestImagePixelBudget', 0, /requestImagePixelBudget must be a positive safe integer/],
+diff --git a/packages/llm/llm/src/types.ts b/packages/llm/llm/src/types.ts
+index 8c5be18..271dca8 100644
+--- a/packages/llm/llm/src/types.ts
++++ b/packages/llm/llm/src/types.ts
+@@ -5,7 +5,7 @@
+  */
+ 
+ import type { Branded } from '@deepseek-ai/dsh-brand'
+-import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
++import type { AudioAttachmentRef, ImageAttachmentRef, VideoAttachmentRef } from '@deepseek-ai/dsh-attachment'
+ import type { CallId, ProviderRequestId, ReasoningEffortId } from './brand.ts'
+ import type { Message } from './message.ts'
+ 
+@@ -74,6 +74,28 @@ export interface ImageBlock {
+   attachment: ImageAttachmentRef
+ }
+ 
++/**
++ * A durable audio reference. Providers do not accept audio natively today, so
++ * the media-understanding transfer is the delivery path: the configured
++ * audio-understanding model reads the bytes and its text result enters the
++ * conversation request instead.
++ */
++export interface AudioBlock {
++  type: 'audio'
++  /** Immutable bytes and container metadata owned by the attachment service. */
++  attachment: AudioAttachmentRef
++}
++
++/**
++ * A durable video reference. As with {@link AudioBlock}, the
++ * media-understanding transfer is the delivery path to the conversation model.
++ */
++export interface VideoBlock {
++  type: 'video'
++  /** Immutable bytes and container metadata owned by the attachment service. */
++  attachment: VideoAttachmentRef
++}
++
+ /** A tool invocation requested by the model. */
+ export interface ToolCallBlock {
+   type: 'tool-call'
+@@ -100,6 +122,8 @@ export interface ContentBlockMap {
+   'text': TextBlock
+   'reasoning': ReasoningBlock
+   'image': ImageBlock
++  'audio': AudioBlock
++  'video': VideoBlock
+   'tool-call': ToolCallBlock
+   'tool-result': ToolResultBlock
+ }
+@@ -152,6 +176,10 @@ export interface LlmProviderInfo {
+ export interface ModelModalityMap {
+   text: 'text'
+   image: 'image'
++  /** Video understanding served by the adapter itself (never the pi-ai wire). */
++  video: 'video'
++  /** Audio understanding served by the adapter itself (never the pi-ai wire). */
++  audio: 'audio'
+ }
+ 
+ /** Any declared provider model modality. */
+@@ -373,5 +401,5 @@ export interface GenerateOptions {
+    * map the purpose to model-hidden transport metadata or purpose-specific
+    * generation policy. Ordinary conversation requests leave it unset.
+    */
+-  purpose?: 'compaction' | 'session-title'
++  purpose?: 'compaction' | 'session-title' | 'media-understanding'
+ }

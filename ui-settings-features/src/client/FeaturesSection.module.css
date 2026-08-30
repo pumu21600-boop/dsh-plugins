@@ -1,0 +1,131 @@
+/* Feature configuration cards: three modality cards each with two route rows. */
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-primary);
+}
+
+.intro {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.notice {
+  margin: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+}
+
+.error {
+  margin: 0;
+  color: var(--dsw-alias-state-error-primary);
+  font-size: 12px;
+}
+
+.pending {
+  margin: 0;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 13px;
+}
+
+.retry {
+  align-self: flex-start;
+  padding: 6px 12px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 12px;
+  /* Native DSH card surface (same token as the settings panel and the
+     settings plugin cards): in dark mode layer-2 is lighter than layer-1,
+     so the modality cards no longer look sunk-in against the panel. */
+  background: var(--dsw-alias-bg-layer-2);
+}
+
+.cardTitle {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-primary);
+}
+
+.routeGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.routeLabel {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.routeHint {
+  font-size: 11px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.routeHintWarn {
+  margin: 0;
+  font-size: 11px;
+  color: var(--dsw-alias-state-warn-label);
+}
+
+.routeRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.field {
+  display: flex;
+  flex: 1 1 200px;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 180px;
+}
+
+.fieldLabel {
+  font-size: 12px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.select {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-primary);
+  font-size: 13px;
+}
+
+.select:disabled {
+  opacity: 0.55;
+}

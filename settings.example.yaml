@@ -1,0 +1,76 @@
+ui-onboarding:
+  welcomeNoticeVersion: 2026-08-13.1
+llm-pi-ai:
+  providers:
+    agnes:
+      apiKeyEnv: AGNES_API_KEY
+      api: openai-completions
+      baseURL: https://api.agnes-ai.cn/v1
+      models:
+        - id: agnes-2.0-flash
+        - id: agnes-2.5-flash
+          input: [ text, image, video ]
+        - id: agnes-2.5-pro
+        - id: agnes-2.5-pro-alpha
+          input: [ text, image, video ]
+    gemini:
+      displayName: 小水管gemini
+      apiKeyEnv: GEMINI_API_KEY
+      api: openai-completions
+      baseURL: https://api.pie-xian.com/v1
+      models:
+        - id: gemini-3.1-flash-lite
+          input: [ text, audio ]
+    deepseek:
+      baseURL: https://token.sensenova.cn/v1
+      retryPolicy:
+        mode: normal
+        maxRetries: 3
+        retryableCodes: [ EMPTY_RESPONSE, SERVER, TIMEOUT, TRANSPORT ]
+        backoff:
+          initialDelayMs: 15000
+          maxDelayMs: 60000
+          jitterRatio: 0.1
+      models:
+        - id: deepseek-v4-flash
+          name: DeepSeek V4 Flash
+          contextWindow: 1000000
+          maxTokens: 384000
+        - id: deepseek-v4-pro
+          name: DeepSeek V4 Pro
+          contextWindow: 1000000
+          maxTokens: 384000
+      apiKeyEnv: DEEPSEEK_API_KEY
+agent-default-model:
+  provider: deepseek
+  model: deepseek-v4-pro
+  reasoningEffort: max
+permission:
+  defaultPreset: danger-full-access
+llm-deepseek: {}
+media-understanding:
+  {
+    image:
+      {
+        provider: agnes,
+        model: "agnes-2.5-flash",
+        backupProvider: "agnes",
+        backupModel: "agnes-2.0-flash"
+      },
+    video:
+      {
+        provider: agnes,
+        model: "agnes-2.5-flash",
+        backupProvider: "agnes",
+        backupModel: "agnes-2.0-flash"
+      },
+    audio:
+      {
+        provider: "gemini",
+        model: "gemini-3.1-flash-lite",
+        backupProvider: "",
+        backupModel: ""
+      }
+  }
+ui-theme:
+  preference: dark
