@@ -1,6 +1,6 @@
 {
   "name": "dsh-media-understanding",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": false,
   "description": "DSH 媒体理解桥接：会话里拖入的图片/视频/音频先交给多模态模型转成文字描述，再喂给当前（纯文本）会话模型。纯插件实现，不改内核。",
   "type": "module",
