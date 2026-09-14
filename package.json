@@ -1,0 +1,29 @@
+{
+  "name": "dsh-media-understanding",
+  "version": "0.2.0",
+  "private": false,
+  "description": "DSH 媒体理解桥接：会话里拖入的图片/视频/音频先交给多模态模型转成文字描述，再喂给当前（纯文本）会话模型。纯插件实现，不改内核。",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-renderer",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-api-remotes"
+      ]
+    }
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@deepseek-ai/schemastery": "^3.18.2"
+  }
+}

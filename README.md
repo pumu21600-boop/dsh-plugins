@@ -1,99 +1,82 @@
 # dsh-media-understanding
 
-DeepSeek Harness（DSH）的媒体理解转接功能集：让纯文本会话模型借助专用多模态模型理解图片、音频、视频。
+DeepSeek Harness（DSH）的**媒体理解桥接**：会话里拖入的图片 / 视频 / 音频，先交给
+多模态模型转成文字描述，再把描述交给当前会话模型 —— 纯文本模型也能"看到"媒体。
 
-## 功能
+> **0.2.0 是纯插件重写。** 0.1.x 靠改 DSH 内核源码 + 重新编译实现（`patches/`、
+> `media-understanding/`、`ui-settings-features/`），在新版上用不了：入口钩子改了名、
+> 配置校验不收 `input: [video]`，而当前部署跑的是官方 npm 包、改源码不生效。
+> 新版**一行内核代码都不用改**，全部走公开接口。旧的源码级实现已删除，
+> 需要的话在 git 历史里（`git show v0.1.0`）仍然完整保留。
 
-- 会话中发送图片 / 音频 / 视频时，自动把媒体内容转交给「功能配置」里指定的理解模型。
-- 理解模型返回的文字描述会替代媒体块，注入会话请求；会话模型（即使纯文本）也能"看到"媒体。
-- 图片、音频、视频各自独立配置主模型与备份模型；主模型失败自动切换备份。
-- 每个媒体块只理解一次，结果记录为 `media/understanding` 会话事件，重放/续接时复用。
+## 原理（4 步，都是公开接口）
 
-## 原理
+1. **拦下来** —— 挂在 `agent/pre-step`（waterfall，`prepend`）上，`await next()` 拿到
+   本步最终消息后再重写。此刻媒体还是原始的 `file` 块（DSH 把文件块换成
+   "只读副本路径"文本，是在更晚构造模型请求时才做的）。
+2. **读字节** —— `attachments.fileHostPath(ref)` 给出本地绝对路径，插件与宿主同进程，
+   直接读盘。`file` 块只带 `attachmentId / name / bytes`（**没有 mediaType**），
+   所以模态按**扩展名**判定。
+3. **问多模态模型** —— 插件自己发 HTTP 给配置好的 OpenAI 兼容端点（视频用
+   `video_url`、音频用 `input_audio`、图片用 `image_url`）。**不走 DSH 的模型通道**，
+   因此不会被"只认 text/image"的适配器与配置校验拦住。
+4. **换掉** —— 把媒体块替换成描述文本，本轮继续；失败或超限时**保留原块**（模型仍能
+   看到只读副本路径），绝不打断本轮。
 
-1. `agent/request-messages` 阶段收集请求中的媒体块。
-2. 预检目标模型声明的 `inputModalities` 是否包含对应媒体类型（image/video/audio）。
-3. 支持则调用理解模型，将结果文本替换媒体块；不支持则替换为可操作的提示文本。
-4. 视频/音频超出 pi-ai 线格式（仅 text/image），由 llm-pi-ai 适配器直连 OpenAI 兼容端点发送（`video_url` / `input_audio` 内容块 + SSE 流式）。
-
-## 目录
-
-- `patches/0001-core-modality-changes.patch` — 对 DSH 核心包的补丁：
-  - `packages/llm/llm/src/types.ts`：`ModelModalityMap` 增加 `video`/`audio`。
-  - `packages/llm/llm-pi-ai`：新增 `DECLARED_MODALITIES` 声明模态（video/audio），`declaredModalities` 透传到 modelInfo/listModels；pi-ai 线格式仍只 text/image。
-- `patches/new-media.ts` — llm-pi-ai 新增文件 `src/media.ts`：视频/音频直连 OpenAI 兼容端点（SSE）。
-- `media-understanding/` — 理解转接插件源码（含理解调用输出上限 1500 tokens）。
-- `ui-settings-features/` — 设置页"功能配置"客户端源码（含目录失效订阅，配置变更后自动刷新模型下拉）。
+结果按附件内容缓存（`attachmentId` 是内容寻址的），同一文件不重复计费。
 
 ## 安装
 
-以本机 DSH 源码树 `deepseek-harness`（基线 commit `b150a55`）为例：
+1. 链接到 profile：
 
-```powershell
-cd deepseek-harness
-git apply <本仓库路径>\patches\0001-core-modality-changes.patch
-Copy-Item <本仓库路径>\patches\new-media.ts packages\llm\llm-pi-ai\src\media.ts
-```
+   ```powershell
+   New-Item -ItemType Junction `
+     -Path "$env:USERPROFILE\.dsh\profiles\web\node_modules\dsh-media-understanding" `
+     -Target "C:\path\to\dsh-media-understanding"
+   ```
 
-`media-understanding/` 与 `ui-settings-features/` 为完整源码，对应覆盖到 `packages/llm/media-understanding/`、`packages/client/ui-settings-features/` 后重建。
+2. 在 `~/.dsh/profiles/web/cordis.patch.yml` 追加（必须用 `insert` 形式，写成顶层
+   `- id: / name:` 只会得到 `patch: entry ... not found` 警告且不生效）：
 
-重建宿主：
+   ```yaml
+   - insert:
+       - id: dsh-media-understanding
+         name: 'dsh-media-understanding'
+   ```
 
-```powershell
-pnpm exec tsc -b packages/llm/llm/tsconfig.json packages/llm/llm-pi-ai/tsconfig.json packages/llm/media-understanding/tsconfig.json
-pnpm exec tsdown --env.DSH_BUILD_FACE host
-pnpm exec tsc -b packages/client/ui-settings-features/tsconfig.json
-cd packages/client/ui-settings-features; pnpm exec tsdown --env.DSH_BUILD_FACE client
-```
-
-重启 DSH 后生效。
+3. 重启后端 + 刷新页面，然后在**设置 → 媒体理解**里填供应商与各模态模型。
 
 ## 配置
 
-`~/.dsh/settings.yaml` 示例（见 `settings.example.yaml`）：
+见 `settings.example.yaml`。配置归属 settings 命名空间 `media-understanding`
+（`~/.dsh/settings.yaml`），由宿主落盘，可在界面里改也可直接编辑文件。
 
-```yaml
-llm-pi-ai:
-  providers:
-    agnes:
-      apiKeyEnv: AGNES_API_KEY
-      api: openai-completions
-      baseURL: https://api.agnes-ai.cn/v1
-      models:
-        - id: agnes-2.5-flash
-          input: [ text, image, video ]   # 声明该模型支持的媒体类型
-    gemini:
-      apiKeyEnv: GEMINI_API_KEY
-      api: openai-completions
-      baseURL: https://api.pie-xian.com/v1
-      models:
-        - id: gemini-3.1-flash-lite
-          input: [ text, audio ]
-media-understanding:
-  image:  { provider: agnes,  model: "agnes-2.5-flash",     backupProvider: agnes, backupModel: "agnes-2.0-flash" }
-  video:  { provider: agnes,  model: "agnes-2.5-flash",     backupProvider: agnes, backupModel: "agnes-2.0-flash" }
-  audio:  { provider: gemini, model: "gemini-3.1-flash-lite", backupProvider: "", backupModel: "" }
+- `providers.<id>`：`baseURL` + `apiKeyEnv`（凭据引用名，值放环境变量或
+  `~/.dsh/.credentials.yaml`）或 `apiKey`（明文）。
+- `image` / `video` / `audio`：各一条主路由 + 可选备份路由，另有可覆盖的提示词。
+- `maxBytes`（默认 20 MB）：单个媒体上限，超限跳过理解。
+- `timeoutMs`（默认 120 s）、`maxOutputTokens`（默认 1500，防理解文本推高会话 token）。
+
+## 已知边界
+
+- **按扩展名判定模态**：`file` 块不带 MIME，所以 `.mp4/.mov/.mp3/...` 这类后缀才认；
+  不带后缀或罕见后缀不会被处理（会照旧走"只读副本路径"）。
+- **只处理用户消息顶层的文件块**：工具结果内嵌的文件块不动。
+- **视频体积**：base64 后约涨 1/3，端点通常也有体积限制；大视频建议先裁剪，
+  或调大 `maxBytes` 后自行承担失败回退。
+- **不发明会话事件**：结果缓存写在 `~/.dsh/storages/media-understanding/cache.json`，
+  不改会话日志格式（公约红线）。
+
+## 测试
+
+```sh
+node tests/pre-step.spec.mjs
 ```
 
-要点：
+用一个本地 mock 的 OpenAI 兼容端点走完整链路（读盘 → 发请求 → 改写消息），
+覆盖：三种模态的线格式、缓存命中、非媒体文件不处理、主备切换、全失败时保留原块、
+超限跳过、开关关闭、端点 replace 语义。
 
-- **必须在供应商模型上声明 `input`**，否则该模型默认只按纯文本处理，预检会拒绝媒体（"does not accept video/audio input"）。
-- 视频/音频模型走 OpenAI 兼容端点，只对 `api: openai-completions` 路由生效。
-- 凭证放在 `~/.dsh/.credentials.yaml` 的对应 `API_KEY` 环境引用里。
-
-## 已知坑
-
-- 理解文本注入会话请求会推高网关 TPM（每分钟 token）配额，可能触发 429 `inference tpm exhausted`；为会话模型路由配置长退避重试（见 settings 示例中 `retryPolicy`），并把理解输出上限保持在 1500 tokens。
-- pi-ai 库线格式只有 text/image，video/audio 是"声明模态"：pi-ai 不感知，由适配器直连网关。
-- 根级 `pnpm run build:lib:host` 在部分环境会因 scripts/website 的 `ImportMeta.dirname` 类型错失败（仓库既有问题），按上面列出的分步构建命令执行。
-
-## 验证
-
-```powershell
-pnpm vitest run packages/llm/llm-pi-ai packages/llm/media-understanding
-pnpm vitest run packages/client/ui-settings-features
-```
-
-## 许可证
+## License
 
 MIT

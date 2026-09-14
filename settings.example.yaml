@@ -1,76 +1,59 @@
-ui-onboarding:
-  welcomeNoticeVersion: 2026-08-13.1
-llm-pi-ai:
+# dsh-media-understanding 配置示例
+#
+# 配置归属 settings 命名空间 `media-understanding`（~/.dsh/settings.yaml）。
+# 可以直接编辑 settings.yaml，也可以在「设置 → 媒体理解」里改（推荐，带校验）。
+#
+# 与 0.1.x 的区别：供应商不再配在 llm-pi-ai 下、也不需要给模型声明
+# input: [video] —— 那套写法在新版会被配置校验拒绝。理解调用由本插件自己
+# 发往下面的 OpenAI 兼容端点，因此视频/音频不会被"只认 text/image"的适配器拦住。
+
+media-understanding:
+  enabled: true
+
+  # 单个媒体上限：超过就跳过理解，请求里会保留"文件已上传 + 只读副本路径"的
+  # 提示文本。视频 base64 后约涨 1/3，端点通常也限体积，按需调。
+  maxBytes: 20971520 # 20 MB
+  timeoutMs: 120000
+  maxOutputTokens: 1500 # 理解输出上限，防止把会话 token 推高
+
   providers:
     agnes:
-      apiKeyEnv: AGNES_API_KEY
-      api: openai-completions
       baseURL: https://api.agnes-ai.cn/v1
-      models:
-        - id: agnes-2.0-flash
-        - id: agnes-2.5-flash
-          input: [ text, image, video ]
-        - id: agnes-2.5-pro
-        - id: agnes-2.5-pro-alpha
-          input: [ text, image, video ]
-    gemini:
-      displayName: 小水管gemini
-      apiKeyEnv: GEMINI_API_KEY
       api: openai-completions
+      apiKeyEnv: AGNES_API_KEY # 值放环境变量或 ~/.dsh/.credentials.yaml
+    gemini:
       baseURL: https://api.pie-xian.com/v1
-      models:
-        - id: gemini-3.1-flash-lite
-          input: [ text, audio ]
-    deepseek:
-      baseURL: https://token.sensenova.cn/v1
-      retryPolicy:
-        mode: normal
-        maxRetries: 3
-        retryableCodes: [ EMPTY_RESPONSE, SERVER, TIMEOUT, TRANSPORT ]
-        backoff:
-          initialDelayMs: 15000
-          maxDelayMs: 60000
-          jitterRatio: 0.1
-      models:
-        - id: deepseek-v4-flash
-          name: DeepSeek V4 Flash
-          contextWindow: 1000000
-          maxTokens: 384000
-        - id: deepseek-v4-pro
-          name: DeepSeek V4 Pro
-          contextWindow: 1000000
-          maxTokens: 384000
-      apiKeyEnv: DEEPSEEK_API_KEY
-agent-default-model:
-  provider: deepseek
-  model: deepseek-v4-pro
-  reasoningEffort: max
-permission:
-  defaultPreset: danger-full-access
-llm-deepseek: {}
-media-understanding:
-  {
-    image:
-      {
-        provider: agnes,
-        model: "agnes-2.5-flash",
-        backupProvider: "agnes",
-        backupModel: "agnes-2.0-flash"
-      },
-    video:
-      {
-        provider: agnes,
-        model: "agnes-2.5-flash",
-        backupProvider: "agnes",
-        backupModel: "agnes-2.0-flash"
-      },
-    audio:
-      {
-        provider: "gemini",
-        model: "gemini-3.1-flash-lite",
-        backupProvider: "",
-        backupModel: ""
-      }
-  }
-ui-theme:
-  preference: dark
+      api: openai-completions
+      apiKeyEnv: GEMINI_API_KEY
+
+  # 每个模态一条主路由 + 可选备份路由；主路由失败自动切备份。
+  image:
+    provider: agnes
+    model: agnes-2.5-flash
+    backupProvider: agnes
+    backupModel: agnes-2.0-flash
+    # prompt 留空用内置中文提示词（图片：主体/场景/文字逐字转写）
+  video:
+    provider: agnes
+    model: agnes-2.5-flash
+    backupProvider: agnes
+    backupModel: agnes-2.0-flash
+  audio:
+    provider: gemini
+    model: gemini-3.1-flash-lite
+    backupProvider: ""
+    backupModel: ""
+
+# ── 端点形状（供应商需支持） ────────────────────────────────────────────
+# 三者都是 POST {baseURL}/chat/completions，messages[0].content =
+#   [ {type: text, text: <prompt>}, <媒体片段> ]
+# 媒体片段：
+#   图片 {type: image_url,   image_url:   {url: "data:image/png;base64,..."}}
+#   视频 {type: video_url,   video_url:   {url: "data:video/mp4;base64,..."}}
+#   音频 {type: input_audio, input_audio: {data: "<base64>", format: "mp3"}}
+# 回复按 OpenAI 形状解析：choices[0].message.content（字符串或分片数组）。
+
+# ── 缓存 ────────────────────────────────────────────────────────────────
+# 理解结果按附件内容（attachmentId 是内容寻址的）缓存在
+#   ~/.dsh/storages/media-understanding/cache.json
+# 同一个文件不会重复计费；删掉该文件即可清空缓存。
