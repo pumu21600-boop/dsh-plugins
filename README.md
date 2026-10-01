@@ -25,31 +25,34 @@ DeepSeek Harness（DSH）的**媒体理解桥接**：会话里拖入的图片 / 
 
 结果按附件内容缓存（`attachmentId` 是内容寻址的），同一文件不重复计费。
 
-## 安装
+## 安装（DSH ≥ 0.2.0：插件即 bundle）
 
-1. 链接到 profile：
+1. junction 到桌面端 profile 的插件目录：
 
    ```powershell
    New-Item -ItemType Junction `
-     -Path "$env:USERPROFILE\.dsh\profiles\web\node_modules\dsh-media-understanding" `
+     -Path "$env:USERPROFILE\.dsh\profiles\desktop\node_modules\dsh-media-understanding" `
      -Target "C:\path\to\dsh-media-understanding"
    ```
 
-2. 在 `~/.dsh/profiles/web/cordis.patch.yml` 追加（必须用 `insert` 形式，写成顶层
-   `- id: / name:` 只会得到 `patch: entry ... not found` 警告且不生效）：
+2. 在 `~/.dsh/profiles/desktop/package.json` 里把插件加入 `dependencies` 与
+   `dsh.profile.bundles`（0.2.0 起 profile 的 cordis.patch.yml 不再负责装载插件；
+   本包自带 `dsh.bundle.patch`，无需再写用户层 insert）：
 
-   ```yaml
-   - insert:
-       - id: dsh-media-understanding
-         name: 'dsh-media-understanding'
+   ```json
+   "dependencies": { "dsh-media-understanding": "0.2.2" }
    ```
 
-3. 重启后端 + 刷新页面，然后在**设置 → 媒体理解**里填供应商与各模态模型。
+   ```json
+   "dsh": { "profile": { "bundles": ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app", "dsh-media-understanding"] } }
+   ```
+
+3. 重启桌面端，然后在**设置 → 媒体理解**里填供应商与各模态模型。
 
 ## 配置
 
-见 `settings.example.yaml`。配置归属 settings 命名空间 `media-understanding`
-（`~/.dsh/settings.yaml`），由宿主落盘，可在界面里改也可直接编辑文件。
+见 `settings.example.yaml`。配置持久化在 profile 条目配置里
+（`lib/index.js` 导出的 `Config` schema，经 configEditor 落盘），界面或文件都能改。
 
 - `providers.<id>`：`baseURL` + `apiKeyEnv`（凭据引用名，值放环境变量或
   `~/.dsh/.credentials.yaml`）或 `apiKey`（明文）。
