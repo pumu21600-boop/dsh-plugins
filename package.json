@@ -1,8 +1,8 @@
 {
   "name": "dsh-css-inject",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": false,
-  "description": "User CSS injection section in the DSH settings panel: custom CSS plus a custom page background, both persisted host-side (settings namespace `css-inject` + storages/dsh-css-inject media), never in browser storage",
+  "description": "User CSS injection section in the DSH settings panel: custom CSS plus a custom page background, both persisted host-side (entry config + storages/dsh-css-inject media), never in browser storage",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
@@ -11,6 +11,9 @@
     "./package.json": "./package.json"
   },
   "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
     "client": {
       "platform": "web",
       "inject": [
@@ -23,6 +26,9 @@
         "@deepseek-ai/dsh-client-ui-sidebar"
       ]
     }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh": ">=0.2.0-rc.2"
   },
   "license": "MIT",
   "dependencies": {
