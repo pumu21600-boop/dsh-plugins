@@ -1,3 +1,5 @@
+> **已停止维护**：本仓库已归档，代码已合并到 [pumu21600-boop/dsh-plugins](https://github.com/pumu21600-boop/dsh-plugins/tree/main/dsh-context-tamer)。仅适配 DSH 0.2 系列早期公测版本（最后验证 `0.2.0-rc.2`），后续版本不再跟进。
+
 # dsh-context-tamer
 
 DSH 上下文降本插件：让长项目会话成本可控、输出不截断、换会话不丢细节。
