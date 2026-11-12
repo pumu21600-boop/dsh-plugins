@@ -4,7 +4,7 @@
 >
 > 这些插件只适配 DeepSeek Harness（DSH）**0.2 系列早期公测版本**，代码最后验证于 `0.2.0-rc.2`；后续 DSH 版本不保证兼容，也不再跟进修复。
 >
-> 不再接受 issue / PR。原六个独立仓库已于 2026-11 归档为只读，源码集中到这里保留备查。
+> 不再接受 issue / PR。原六个独立仓库已归档；源码、完整提交历史和旧 tag 都集中到这里保留备查（见下方「历史」）。
 
 ## 插件列表
 
@@ -20,7 +20,7 @@
 ## 兼容性
 
 - 仅适配 **DSH 0.2 系列早期公测版本**，最后验证版本 `0.2.0-rc.2`。
-- 不兼容 0.1.x；0.1.x 的源码级补丁实现只保留在各插件旧仓库的 git 历史里。
+- 不兼容 0.1.x；0.1.x 的源码级补丁实现只保留在各插件的 legacy 历史里。
 - 新版 DSH 的插件接口若有变化，本仓库不会跟进。
 
 ## 安装
@@ -33,7 +33,7 @@
 
 ## 历史
 
-原六个仓库（`dsh-context-tamer`、`dsh-memory`、`dsh-token-billing`、`dsh-media-understanding`、`dsh-css-inject`、`dsh-plugin-guard`）已归档为只读，完整提交历史和旧 tag 仍可查看。
+原六个仓库（`dsh-context-tamer`、`dsh-memory`、`dsh-token-billing`、`dsh-media-understanding`、`dsh-css-inject`、`dsh-plugin-guard`）已归档；它们的完整提交历史保存在本仓库的 `legacy/<插件名>` 分支，旧 tag 保存在 `legacy/<插件名>/<tag>`。
 
 ## 许可证
 
