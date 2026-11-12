@@ -1,3 +1,5 @@
+> **已停止维护**：本仓库已归档，代码已合并到 [pumu21600-boop/dsh-plugins](https://github.com/pumu21600-boop/dsh-plugins/tree/main/dsh-token-billing)。仅适配 DSH 0.2 系列早期公测版本（最后验证 `0.2.0-rc.2`），后续版本不再跟进。
+
 # dsh-token-billing
 
 DSH 插件：按模型实时统计 token 消耗与费用。
