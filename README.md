@@ -1,3 +1,5 @@
+> **已停止维护**：本仓库已归档，代码已合并到 [pumu21600-boop/dsh-plugins](https://github.com/pumu21600-boop/dsh-plugins/tree/main/dsh-memory)。仅适配 DSH 0.2 系列早期公测版本（最后验证 `0.2.0-rc.2`），后续版本不再跟进。
+
 # dsh-memory
 
 DSH 记忆插件 — 自动索引全部会话历史到记忆库。
