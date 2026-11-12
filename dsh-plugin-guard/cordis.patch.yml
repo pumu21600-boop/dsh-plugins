@@ -1,0 +1,7 @@
+# dsh-plugin-guard bundle patch（DSH ≥ 0.2.0 插件即 bundle）。
+# 本包被加入 profile 的 dsh.profile.bundles 后，由这层 patch 把公约插件
+# 自身插入 cordis 树；插件不声明 Config，因此不生成设置表单。
+
+- insert:
+    - id: dsh-plugin-guard
+      name: 'dsh-plugin-guard'

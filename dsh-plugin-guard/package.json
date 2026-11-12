@@ -1,0 +1,27 @@
+{
+  "name": "dsh-plugin-guard",
+  "version": "0.1.2",
+  "private": true,
+  "description": "插件创作公约 / Plugin Authoring Conventions — auto-injects the dsh plugin-authoring rules into every agent's system prompt",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh": ">=0.2.0-rc.2"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "esbuild": "^0.28.2"
+  }
+}
