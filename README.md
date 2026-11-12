@@ -1,3 +1,5 @@
+> **已停止维护**：本仓库已归档，代码已合并到 [pumu21600-boop/dsh-plugins](https://github.com/pumu21600-boop/dsh-plugins/tree/main/dsh-css-inject)。仅适配 DSH 0.2 系列早期公测版本（最后验证 `0.2.0-rc.2`），后续版本不再跟进。
+
 # dsh-css-inject
 
 DSH 界面美化插件：在设置面板里粘贴自定义 CSS，保存后立即应用到整个界面（无需刷新）。附带自定义背景、悬停 CSS 检查器、下拉框美化三个小工具。
