@@ -1,3 +1,5 @@
+> **已停止维护**：本仓库已归档，代码已合并到 [pumu21600-boop/dsh-plugins](https://github.com/pumu21600-boop/dsh-plugins/tree/main/dsh-plugin-guard)。仅适配 DSH 0.2 系列早期公测版本（最后验证 `0.2.0-rc.2`），后续版本不再跟进。
+
 # dsh-plugin-guard（插件创作公约）
 
 面向 [DeepSeek Harness](https://github.com/deepseek-ai/DeepSeek-Harness)（dsh）
